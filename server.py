@@ -2,6 +2,11 @@ import socket
 import threading
 
 def main():
+    """
+    Starts the TCP server, accepts incoming client connections,
+    and pairs clients together. Each connected client is handled
+    in a separate thread. If a client disconnects, the server notifies the partner.
+    """
     clients = []
     pairs = {}
 
@@ -34,8 +39,13 @@ def main():
 
         thread.start()
 
-
 def handle_client(clientsocket, address, clients, pairs, threading_lock):
+    """
+    Handles communication with a connected client.
+
+    Receives messages, forwards them to the client's partner,
+    and cleans up the client's connection when they disconnect.
+    """
     print("Connected: ", address)
 
     while True:
