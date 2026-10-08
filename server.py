@@ -1,7 +1,7 @@
 import socket
 import threading
 
-def main():
+def main(stop_event):
     """
     Starts the TCP server, accepts incoming client connections,
     and pairs clients together. Each connected client is handled
@@ -14,35 +14,46 @@ def main():
 
     # TCP server setup, and bind it to port 5000 on local machine
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Allow reuse of the address
     server.bind((socket.gethostname(), 5000))
     server.listen()
+    server.settimeout(1)  # Set a timeout for the accept() call to allow periodic checks for stop_event
     print("Server is listening...")
-        
-    while True:
-        # Wait for a connection
-        clientsocket, address = server.accept()
 
-        with threading_lock:
-            clients.append(clientsocket)
+    try:
+        while not stop_event.is_set():
+            # Wait for a connection
+            try:
+                clientsocket, address = server.accept()
+            except socket.timeout:
+                continue
 
-            # create a pair
-            if len(clients) >= 2:
-                client1 = clients.pop(0)
-                client2 = clients.pop(0)
+            with threading_lock:
+                clients.append(clientsocket)
 
-                pairs[client1] = client2
-                pairs[client2] = client1
+                # create a pair
+                if len(clients) >= 2:
+                    client1 = clients.pop(0)
+                    client2 = clients.pop(0)
 
-                print(f"Created a pair! {client1} with {client2} ")
+                    pairs[client1] = client2
+                    pairs[client2] = client1
 
-        # Start a new thread to handle the client
-        thread = threading.Thread(
-            target=handle_client,
-            args=(clientsocket, address, clients, pairs, threading_lock),
-            name=f"ClientThread-{address}"
-        )
+                    print(f"Created a pair! {client1} with {client2} ")
 
-        thread.start()
+            # Start a new thread to handle the client
+            thread = threading.Thread(
+                target=handle_client,
+                args=(clientsocket, address, clients, pairs, threading_lock),
+                name=f"ClientThread-{address},",
+                daemon=True  # Allow the thread to be killed when the main program exits
+            )
+
+            thread.start()
+    finally:
+        # Clean up server socket
+        server.close()
+        print("Server is closing.")
 
 def handle_client(clientsocket, address, clients, pairs, threading_lock):
     """
@@ -94,4 +105,9 @@ def handle_client(clientsocket, address, clients, pairs, threading_lock):
     print("Disconnected: ", address)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main(threading.Event())  # Pass a dummy Event for standalone execution
+    except KeyboardInterrupt:
+        print("Server is shutting down due to KeyboardInterrupt.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
