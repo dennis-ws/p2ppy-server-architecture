@@ -31,6 +31,10 @@ def main(stop_event):
             with threading_lock:
                 clients.append(clientsocket)
 
+                for client in clients:
+                    if client.fileno() == -1:  # Check if the socket is closed
+                        clients.remove(client)
+
                 # create a pair
                 if len(clients) >= 2:
                     client1 = clients.pop(0)
