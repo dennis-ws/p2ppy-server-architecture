@@ -9,15 +9,19 @@ def main():
     """
     clients = []
     pairs = {}
+    # Protects shared mutable data structures (clients and pairs) from concurrent access
+    threading_lock = threading.Lock() 
 
-    threading_lock = threading.Lock()
+    # TCP server setup, and bind it to port 5000 on local machine
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((socket.gethostname(), 5000))
     server.listen()
     print("Server is listening...")
         
     while True:
+        # Wait for a connection
         clientsocket, address = server.accept()
+
         with threading_lock:
             clients.append(clientsocket)
 
@@ -31,6 +35,7 @@ def main():
 
                 print(f"Created a pair! {client1} with {client2} ")
 
+        # Start a new thread to handle the client
         thread = threading.Thread(
             target=handle_client,
             args=(clientsocket, address, clients, pairs, threading_lock),
@@ -50,8 +55,10 @@ def handle_client(clientsocket, address, clients, pairs, threading_lock):
 
     while True:
         try:
+            # Receive data from the client
             data = clientsocket.recv(1024)
-        
+
+            # If no data is received or the client sends "exit", break the loop
             if not data or data.decode() == "exit":
                 break
 
@@ -63,6 +70,7 @@ def handle_client(clientsocket, address, clients, pairs, threading_lock):
             print(f"Sending to partner for {address}: {partner}")
             if partner:
                 try: 
+                    # Send the received data to the partner client
                     partner.sendall(data)
                 except (BrokenPipeError, ConnectionResetError):
                     print(f"Error occurred while sending message to {address}")
