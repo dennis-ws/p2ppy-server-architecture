@@ -1,10 +1,41 @@
 import socket
 import threading
 
-clients = []
-pairs = {}
+def main():
+    clients = []
+    pairs = {}
 
-def handle_client(clientsocket, address):
+    threading_lock = threading.Lock()
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((socket.gethostname(), 5000))
+    server.listen()
+    print("Server is listening...")
+        
+    while True:
+        clientsocket, address = server.accept()
+        with threading_lock:
+            clients.append(clientsocket)
+
+            # create a pair
+            if len(clients) >= 2:
+                client1 = clients.pop(0)
+                client2 = clients.pop(0)
+
+                pairs[client1] = client2
+                pairs[client2] = client1
+
+                print(f"Created a pair! {client1} with {client2} ")
+
+        thread = threading.Thread(
+            target=handle_client,
+            args=(clientsocket, address, clients, pairs, threading_lock),
+            name=f"ClientThread-{address}"
+        )
+
+        thread.start()
+
+
+def handle_client(clientsocket, address, clients, pairs, threading_lock):
     print("Connected: ", address)
 
     while True:
@@ -16,7 +47,8 @@ def handle_client(clientsocket, address):
 
             print(f"Message from {address}: {data.decode()}")
 
-            partner = pairs.get(clientsocket)
+            with threading_lock:
+                partner = pairs.get(clientsocket)
 
             print(f"Sending to partner for {address}: {partner}")
             if partner:
@@ -30,9 +62,11 @@ def handle_client(clientsocket, address):
             break
         
     # Remove the pair when a client disconnects
-    partner = pairs.pop(clientsocket, None)
+    with threading_lock:
+        partner = pairs.pop(clientsocket, None)
+        if partner:
+            pairs.pop(partner, None)
     if partner:
-        pairs.pop(partner, None)
         try:
             partner.sendall(b"Your partner has disconnected.")
         except (BrokenPipeError, ConnectionResetError):
@@ -41,29 +75,5 @@ def handle_client(clientsocket, address):
     clientsocket.close()
     print("Disconnected: ", address)
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((socket.gethostname(), 5000))
-server.listen()
-print("Server is listening...")
-
-while True:
-    clientsocket, address = server.accept()
-    clients.append(clientsocket)
-
-    # create a pair
-    if len(clients) >= 2:
-        client1 = clients.pop(0)
-        client2 = clients.pop(0)
-
-        pairs[client1] = client2
-        pairs[client2] = client1
-
-        print(f"Created a pair! {client1} with {client2} ")
-
-    thread = threading.Thread(
-        target=handle_client,
-        args=(clientsocket, address),
-        name=f"ClientThread-{address}"
-    )
-
-    thread.start()
+if __name__ == '__main__':
+    main()
