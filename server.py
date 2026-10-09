@@ -1,6 +1,18 @@
 import socket
 import threading
 
+def close_socket(socket):
+    """Close a socket and handle any exceptions."""
+    try:
+        socket.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass  # Socket is already closed or not connected
+
+    try:
+        socket.close()
+    except OSError:
+        pass  # Socket is already closed
+
 def main(stop_event):
     """
     Starts the TCP server, accepts incoming client connections,
@@ -56,8 +68,8 @@ def main(stop_event):
             thread.start()
     finally:
         # Clean up server socket
-        server.close()
         print("Server is closing.")
+        close_socket(server)
 
 def handle_client(clientsocket, address, clients, pairs, threading_lock):
     """
@@ -105,7 +117,7 @@ def handle_client(clientsocket, address, clients, pairs, threading_lock):
         except (BrokenPipeError, ConnectionResetError):
             print(f"Error occurred while notifying partner of {address} disconnection.")
     
-    clientsocket.close()
+    close_socket(clientsocket)
     print("Disconnected: ", address)
 
 if __name__ == '__main__':
