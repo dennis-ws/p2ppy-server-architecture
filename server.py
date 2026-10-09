@@ -73,8 +73,8 @@ def handle_client(clientsocket, address, clients, pairs, threading_lock):
             # Receive data from the client
             data = clientsocket.recv(1024)
 
-            # If no data is received or the client sends "exit", break the loop
-            if not data or data.decode() == "exit":
+            # If no data is received or the client sends "/exit", break the loop
+            if not data or data.decode() == "/exit":
                 break
 
             print(f"Message from {address}: {data.decode()}")

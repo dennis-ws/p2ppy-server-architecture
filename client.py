@@ -34,7 +34,7 @@ while not stop_event.is_set():
     try: 
         tosend = input("Send a message: ")
 
-        if tosend == "exit":
+        if tosend == "/exit":
             stop_event.set()
             break
 
