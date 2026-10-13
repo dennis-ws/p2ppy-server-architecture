@@ -11,11 +11,11 @@ def test_basic_addition():
     assert 1 + 1 == 2
 def test_server_main():
     """Test that the server starts and shuts down cleanly."""
-    stop_event = threading.Event()
+
+    chat_server = server.ChatServer(HOST, PORT)
 
     server_thread = threading.Thread(
-        target=server.main,
-        args=(stop_event,),
+        target=chat_server.start,
         daemon=True,
     )
 
@@ -41,7 +41,7 @@ def test_server_main():
 
     finally:
         # Request a graceful shutdown.
-        stop_event.set()
+        chat_server.stop_event.set()
 
         # Wait for the server thread to finish.
         server_thread.join(timeout=3)
@@ -51,11 +51,10 @@ def test_server_main():
 @pytest.fixture
 def running_server():
     """Start the server before a test and stop it afterward."""
-    stop_event = threading.Event()
+    chat_server = server.ChatServer(HOST, PORT)
 
     server_thread = threading.Thread(
-        target=server.main,
-        args=(stop_event,),
+        target=chat_server.start,
         daemon=True,
     )
     server_thread.start()
@@ -73,7 +72,7 @@ def running_server():
             break
         except OSError:
             if time.monotonic() >= deadline:
-                stop_event.set()
+                chat_server.stop_event.set()
                 server_thread.join(timeout=2)
                 pytest.fail("Server failed to start")
             time.sleep(0.05)
@@ -81,7 +80,7 @@ def running_server():
     yield
 
     # Stop the server after the test finishes.
-    stop_event.set()
+    chat_server.stop_event.set()
     server_thread.join(timeout=3)
 
 
@@ -110,6 +109,11 @@ def test_client_can_send_message(running_server):
     client_b = connect_client()
 
     try:
+        # Confirm that both clients are connected and paired.
+        expected_message = b"You have been paired with a partner!"
+        assert expected_message == client_a.recv(1024)
+        assert expected_message == client_b.recv(1024)
+
         # Sending requires a live TCP connection.
         message = b"Hello server!"
         client_a.sendall(message)
@@ -158,6 +162,11 @@ def test_client_can_receive_message(running_server):
     client_b = connect_client()
 
     try:
+        # Confirm that both clients are connected and paired.
+        expected_message = b"You have been paired with a partner!"
+        assert expected_message == client_a.recv(1024)
+        assert expected_message == client_b.recv(1024)
+
         message = b"Hello from Client A!"
         client_a.sendall(message)
 
@@ -340,6 +349,10 @@ def test_server_accepts_new_connections_after_disconnect(running_server):
     client_b = connect_client()
 
     try:
+        expected_message = b"You have been paired with a partner!"
+        assert expected_message == client_a.recv(1024)
+        assert expected_message == client_b.recv(1024)
+
         message = b"Confirm pairing"
         client_a.sendall(message)
         assert message in receive_until(client_b, message)
@@ -354,18 +367,20 @@ def test_server_accepts_new_connections_after_disconnect(running_server):
 
         # Connect a new pair after the previous pair has disconnected.
         client_c = connect_client()
-        client_d = connect_client()
 
         try:
+            expected_message = b"You have been paired with a partner!"
+            assert expected_message == client_c.recv(1024)
+
             new_message = b"New pair works"
             client_c.sendall(new_message)
 
-            received = receive_until(client_d, new_message)
+            received = receive_until(client_b, new_message)
             assert new_message in received
 
         finally:
             client_c.close()
-            client_d.close()
+            client_b.close()
 
     finally:
         if client_a is not None:
