@@ -1,128 +1,175 @@
 import socket
 import threading
 
-def close_socket(socket):
-    """Close a socket and handle any exceptions."""
-    try:
-        socket.shutdown(socket.SHUT_RDWR)
-    except OSError:
-        pass  # Socket is already closed or not connected
+class ChatServer:
+    def __init__(self, host=None, port=5000):
+        self.host = host
+        self.port = port
+        self.waiting_clients = []
+        self.active_clients = []
+        self.pairs = {}
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.threads = []
 
-    try:
-        socket.close()
-    except OSError:
-        pass  # Socket is already closed
+    def start(self):
+        """Starts the TCP server, accepts incoming client connections,
+        and pairs clients together. Each connected client is handled
+        in a separate thread. If a client disconnects, the server notifies the partner.
+        """
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((self.host, self.port))
+        server_socket.listen()
+        server_socket.settimeout(1)  # Set a timeout for the accept() call to allow periodic checks for stop_event
+        print(f"Server is listening on {self.host}:{self.port}")
 
-def main(stop_event):
-    """
-    Starts the TCP server, accepts incoming client connections,
-    and pairs clients together. Each connected client is handled
-    in a separate thread. If a client disconnects, the server notifies the partner.
-    """
-    clients = []
-    pairs = {}
-    # Protects shared mutable data structures (clients and pairs) from concurrent access
-    threading_lock = threading.Lock() 
-
-    # TCP server setup, and bind it to port 5000 on local machine
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Allow reuse of the address
-    server.bind((socket.gethostname(), 5000))
-    server.listen()
-    server.settimeout(1)  # Set a timeout for the accept() call to allow periodic checks for stop_event
-    print("Server is listening...")
-
-    try:
-        while not stop_event.is_set():
-            # Wait for a connection
-            try:
-                clientsocket, address = server.accept()
-            except socket.timeout:
-                continue
-
-            with threading_lock:
-                clients.append(clientsocket)
-
-                for client in clients:
-                    if client.fileno() == -1:  # Check if the socket is closed
-                        clients.remove(client)
-
-                # create a pair
-                if len(clients) >= 2:
-                    client1 = clients.pop(0)
-                    client2 = clients.pop(0)
-
-                    pairs[client1] = client2
-                    pairs[client2] = client1
-
-                    print(f"Created a pair! {client1} with {client2} ")
-
-            # Start a new thread to handle the client
-            thread = threading.Thread(
-                target=handle_client,
-                args=(clientsocket, address, clients, pairs, threading_lock),
-                name=f"ClientThread-{address},",
-                daemon=True  # Allow the thread to be killed when the main program exits
-            )
-
-            thread.start()
-    finally:
-        # Clean up server socket
-        print("Server is closing.")
-        close_socket(server)
-
-def handle_client(clientsocket, address, clients, pairs, threading_lock):
-    """
-    Handles communication with a connected client.
-
-    Receives messages, forwards them to the client's partner,
-    and cleans up the client's connection when they disconnect.
-    """
-    print("Connected: ", address)
-
-    while True:
         try:
-            # Receive data from the client
-            data = clientsocket.recv(1024)
+            while not self.stop_event.is_set():
+                try:
+                    client_socket, address = server_socket.accept()
+                except socket.timeout:
+                    continue
 
-            # If no data is received or the client sends "/exit", break the loop
-            if not data or data.decode() == "/exit":
+                with self.lock:
+                    self.waiting_clients.append(client_socket)
+
+                    # Remove closed sockets from the waiting clients list
+                    self.waiting_clients = [client for client in self.waiting_clients if client.fileno() != -1]
+
+                    # Create a pair if there are at least two waitingclients
+                    if len(self.waiting_clients) >= 2:
+                        self.pair_clients()
+
+                # Start a new thread to handle the client
+                thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, address),
+                    name=f"ClientThread-{address}",
+                    daemon=True  # Allow the thread to be killed when the main program exits
+                )
+                thread.start()
+        finally:
+            print("Server is closing.")
+            self.close_socket(server_socket)
+
+    def close_socket(self, soc: socket.socket):
+        """Close a socket and handle any exceptions."""
+        with self.lock:
+            try:
+                soc.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Socket is already closed or not connected
+
+            try:
+                soc.close()
+            except OSError:
+                pass  # Socket is already closed
+
+    def pair_clients(self):
+        """
+            Pairs two clients together for communication. 
+            Note: The lock happens in the calling function, so this function assumes that the lock is already acquired.
+        """
+
+        client1 = self.waiting_clients.pop(0)
+        client2 = self.waiting_clients.pop(0)
+
+        self.pairs[client1] = client2
+        self.pairs[client2] = client1
+
+        self.active_clients.append(client1)
+        self.active_clients.append(client2)
+
+        print(f"Created a pair! {client1} with {client2}")
+        try:
+            client1.sendall(b"You have been paired with a partner!")
+            client2.sendall(b"You have been paired with a partner!")
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            print(f"Error occurred while notifying clients of pairing.")
+            # Clean up if sending fails
+            if client1 in self.active_clients:
+                self.active_clients.remove(client1)
+            if client2 in self.active_clients:
+                self.active_clients.remove(client2)
+            if client1 in self.pairs:
+                self.pairs.pop(client1, None)
+            if client2 in self.pairs:
+                self.pairs.pop(client2, None)
+            
+
+    def disconnect_client(self, client_socket):
+        """Disconnects a client and notifies its partner if connected."""
+        partner = None 
+
+        with self.lock:
+            partner = self.pairs.pop(client_socket, None)
+            # Remove the partner from the pairs dictionary if it exists
+            if partner is not None:
+                self.pairs.pop(partner, None)
+                # Remove the partner from active clients if it's still there
+                if self.pairs.get(partner) is client_socket:
+                    self.pairs.pop(partner, None)
+                # Remove the partner from active clients if it's still there
+                if partner in self.active_clients:
+                    self.active_clients.remove(partner)
+            # Remove the client from active clients if it's still there
+            if client_socket in self.active_clients:
+                self.active_clients.remove(client_socket)
+            # Add the partner back to waiting clients if it's still connected and not already waiting
+            if partner is not None and partner.fileno() != -1 and partner not in self.waiting_clients:
+                self.waiting_clients.append(partner)
+        # Close the client socket
+        self.close_socket(client_socket)
+
+        # if the partner is still connected, notify them about the disconnection
+        if partner is not None and partner.fileno() != -1:
+            try:
+                partner.sendall(b"Your partner has disconnected. You are now waiting for a new partner.")
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                print(f"Error occurred while notifying partner of disconnection.")
+
+    def handle_client(self, client_socket, address):
+        """Handles communication with a connected client.
+
+        Receives messages, forwards them to the client's partner,
+        and cleans up the client's connection when they disconnect.
+        """
+        print(f"Connected: {address} with thread {threading.current_thread().name}")
+
+        while True:
+            try:
+                data = client_socket.recv(1024)
+
+                if not data or data.decode() == "/exit":
+                    break
+
+                print(f"Message from {address}: {data.decode()}")
+
+                with self.lock:
+                    partner = self.pairs.get(client_socket)
+
+                print(f"Sending to partner for {address}: {partner}")
+                if partner:
+                    try:
+                        partner.sendall(data)
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        print(f"Error occurred while sending message to {address}")
+                else:
+                    print(f"No partner found for {address}. Message not sent.")
+                    client_socket.sendall(b"No partner found. Please wait for a partner to connect.")
+
+            except (ConnectionResetError, ConnectionAbortedError, OSError):
+                print(f"Connection lost with {address}")
                 break
 
-            print(f"Message from {address}: {data.decode()}")
-
-            with threading_lock:
-                partner = pairs.get(clientsocket)
-
-            print(f"Sending to partner for {address}: {partner}")
-            if partner:
-                try: 
-                    # Send the received data to the partner client
-                    partner.sendall(data)
-                except (BrokenPipeError, ConnectionResetError):
-                    print(f"Error occurred while sending message to {address}")
-
-        except (ConnectionResetError, ConnectionAbortedError, OSError):
-            print(f"Connection lost with {address}")
-            break
-        
-    # Remove the pair when a client disconnects
-    with threading_lock:
-        partner = pairs.pop(clientsocket, None)
-        if partner:
-            pairs.pop(partner, None)
-    if partner:
-        try:
-            partner.sendall(b"Your partner has disconnected.")
-        except (BrokenPipeError, ConnectionResetError):
-            print(f"Error occurred while notifying partner of {address} disconnection.")
-    
-    close_socket(clientsocket)
-    print("Disconnected: ", address)
+        self.disconnect_client(client_socket)
+        print(f"Disconnected: {address} with thread {threading.current_thread().name}")
 
 if __name__ == '__main__':
     try:
-        main(threading.Event())  # Pass a dummy Event for standalone execution
+        server = ChatServer(socket.gethostname(), 5000)
+        server.start()  # Pass a dummy Event for standalone execution
     except KeyboardInterrupt:
         print("Server is shutting down due to KeyboardInterrupt.")
     except Exception as e:
