@@ -25,6 +25,12 @@ class ChatServer:
         print(f"Server is listening on {self.host}:{self.port}")
 
         try:
+            # Start a thread to handle server commands
+            command_thread = threading.Thread(
+                target=self.server_command, 
+                name="CommandThread", 
+                daemon=True)
+            command_thread.start()
             while not self.stop_event.is_set():
                 try:
                     client_socket, address = server_socket.accept()
@@ -52,6 +58,88 @@ class ChatServer:
         finally:
             print("Server is closing.")
             self.close_socket(server_socket)
+
+    def server_command(self):
+        """Handles server commands from the console."""
+        while not self.stop_event.is_set():
+            command = input("Enter command (type 'exit' to stop the server): ")
+            self.handle_command(command)
+
+    def handle_command(self, command):
+        """Handles server commands from the console."""
+        match command.strip().lower():
+            case "exit":
+                print("Stopping the server...")
+                self.stop_event.set()
+            case "status":
+                print("Server Status:")
+                print(f"  Waiting Clients: {self.waiting_clients_count()}")
+                print(f"  Active Clients: {self.active_clients_count()}")
+                print(f"  Pairs: {self.pairs_count()}")
+                print(f"  Active Threads: {self.get_thread_count()}")
+            case "list waiting":
+                print("Waiting Clients:")
+                for client in self.waiting_clients_list():
+                    print(f"  {client}")
+            case "list active":
+                print("Active Clients:")
+                for client in self.active_clients_list():
+                    print(f"  {client}")
+            case "list threads":
+                print("Active Threads:")
+                for thread in self.get_thread():
+                    print(f"  {thread.name}")
+            case "help":
+                print("Available commands:")
+                print("  exit - Stop the server")
+                print("  status - Show server status")
+                print("  list waiting - List waiting clients")
+                print("  list active - List active clients")
+                print("  list threads - List active threads")
+                print("  help - Show this help message")
+            case _:
+                print(f"Unknown command: {command}")
+
+    def waiting_clients_count(self):
+        """Returns the number of clients currently waiting to be paired."""
+        with self.lock:
+            return len(self.waiting_clients)
+
+    def waiting_clients_list(self):
+        """Returns a list of clients currently waiting to be paired."""
+        with self.lock:
+            return [client.getpeername() for client in self.waiting_clients if client.fileno() != -1]
+
+    def active_clients_count(self):
+        """Returns the number of clients currently active (paired)."""
+        with self.lock:
+            return len(self.active_clients)
+
+    def active_clients_list(self):
+        """Returns a list of clients currently active (paired)."""
+        with self.lock:
+            return [client.getpeername() for client in self.active_clients if client.fileno() != -1]
+
+    def pairs_count(self):
+        """Returns the number of active pairs."""
+        with self.lock:
+            return len(self.pairs) // 2  # Each pair consists of two clients
+
+    def current_host(self):
+        """Returns the current host of the server."""
+        return self.host
+
+    def current_port(self):
+        """Returns the current port of the server."""
+        return self.port
+
+    def get_thread_count(self):
+        """Returns the number of active threads."""
+        return threading.active_count()
+
+    def get_thread(self):
+        """Returns a list of active threads."""
+        return threading.enumerate()
 
     def close_socket(self, soc: socket.socket):
         """Close a socket and handle any exceptions."""
