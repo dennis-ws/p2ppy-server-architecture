@@ -166,6 +166,11 @@ class ChatServer:
         self.disconnect_client(client_socket)
         print(f"Disconnected: {address} with thread {threading.current_thread().name}")
 
+        # Check if there are waiting clients to pair after a client disconnects
+        if len(self.waiting_clients) > 0:
+            with self.lock:
+                self.pair_clients()
+
 if __name__ == '__main__':
     try:
         server = ChatServer(socket.gethostname(), 5000)
