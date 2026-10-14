@@ -141,6 +141,41 @@ class ChatServer:
         """Returns a list of active threads."""
         return threading.enumerate()
 
+    def pop_waiting_client(self):
+        """Pops a client from the waiting clients list in a thread-safe manner. 
+            Calls to this function should be made while holding the lock.
+        """
+        if self.waiting_clients:
+            return self.waiting_clients.pop(0)
+        return None
+
+    def append_waiting_client(self, client_socket):
+        """Appends a client to the waiting clients list in a thread-safe manner. 
+            Calls to this function should be made while holding the lock."""
+        if client_socket.fileno() != -1 and client_socket not in self.waiting_clients:
+            self.waiting_clients.append(client_socket)
+
+    def remove_active_client(self, client_socket):
+        """Removes a client from the active clients list in a thread-safe manner. 
+            Calls to this function should be made while holding the lock.
+        """
+        if client_socket in self.active_clients:
+            self.active_clients.remove(client_socket)
+
+    def append_active_client(self, client_socket):
+        """Appends a client to the active clients list in a thread-safe manner. 
+            Calls to this function should be made while holding the lock."""
+        if client_socket.fileno() != -1 and client_socket not in self.active_clients:
+            self.active_clients.append(client_socket)
+
+    def pop_pair(self, client_socket):
+        """Pops a client from the pairs dictionary in a thread-safe manner.
+            Calls to this function should be made while holding the lock.
+        """
+        return self.pairs.pop(client_socket, None)
+
+    
+
     def close_socket(self, soc: socket.socket):
         """Close a socket and handle any exceptions."""
         with self.lock:
@@ -160,14 +195,18 @@ class ChatServer:
             Note: The lock happens in the calling function, so this function assumes that the lock is already acquired.
         """
 
-        client1 = self.waiting_clients.pop(0)
-        client2 = self.waiting_clients.pop(0)
+        client1 = self.pop_waiting_client()
+        client2 = self.pop_waiting_client()
+
+        if not client1 or not client2:
+            print("Not enough clients to pair.")
+            return
 
         self.pairs[client1] = client2
         self.pairs[client2] = client1
 
-        self.active_clients.append(client1)
-        self.active_clients.append(client2)
+        self.append_active_client(client1)
+        self.append_active_client(client2)
 
         print(f"Created a pair! {client1} with {client2}")
         try:
@@ -176,14 +215,10 @@ class ChatServer:
         except (BrokenPipeError, ConnectionResetError, OSError):
             print(f"Error occurred while notifying clients of pairing.")
             # Clean up if sending fails
-            if client1 in self.active_clients:
-                self.active_clients.remove(client1)
-            if client2 in self.active_clients:
-                self.active_clients.remove(client2)
-            if client1 in self.pairs:
-                self.pairs.pop(client1, None)
-            if client2 in self.pairs:
-                self.pairs.pop(client2, None)
+            self.remove_active_client(client1)
+            self.remove_active_client(client2)
+            self.pop_pair(client1)
+            self.pop_pair(client2)
             
 
     def disconnect_client(self, client_socket):
@@ -191,22 +226,22 @@ class ChatServer:
         partner = None 
 
         with self.lock:
-            partner = self.pairs.pop(client_socket, None)
+            partner = self.pop_pair(client_socket)
             # Remove the partner from the pairs dictionary if it exists
             if partner is not None:
-                self.pairs.pop(partner, None)
+                self.pop_pair(partner)
                 # Remove the partner from active clients if it's still there
                 if self.pairs.get(partner) is client_socket:
-                    self.pairs.pop(partner, None)
+                    self.pop_pair(partner)
                 # Remove the partner from active clients if it's still there
                 if partner in self.active_clients:
-                    self.active_clients.remove(partner)
+                    self.remove_active_client(partner)
             # Remove the client from active clients if it's still there
             if client_socket in self.active_clients:
-                self.active_clients.remove(client_socket)
+                self.remove_active_client(client_socket)
             # Add the partner back to waiting clients if it's still connected and not already waiting
             if partner is not None and partner.fileno() != -1 and partner not in self.waiting_clients:
-                self.waiting_clients.append(partner)
+                self.append_waiting_client(partner)
         # Close the client socket
         self.close_socket(client_socket)
 
@@ -255,8 +290,8 @@ class ChatServer:
         print(f"Disconnected: {address} with thread {threading.current_thread().name}")
 
         # Check if there are waiting clients to pair after a client disconnects
-        if len(self.waiting_clients) > 0:
-            with self.lock:
+        with self.lock:
+            if len(self.waiting_clients) >= 2:
                 self.pair_clients()
 
 if __name__ == '__main__':
