@@ -174,7 +174,7 @@ class ChatServer:
 if __name__ == '__main__':
     try:
         server = ChatServer(socket.gethostname(), 5000)
-        server.start()  # Pass a dummy Event for standalone execution
+        server.start()
     except KeyboardInterrupt:
         print("Server is shutting down due to KeyboardInterrupt.")
     except Exception as e:
